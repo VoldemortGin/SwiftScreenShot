@@ -19,10 +19,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var outputManager: OutputManager!
     private var imageProcessor: ImageProcessor!
     private var settings: ScreenshotSettings!
+    private var delayedScreenshotManager: DelayedScreenshotManager!
 
     // UI components
     private var settingsWindowController: SettingsWindowController?
+    private var historyWindow: HistoryWindow?
     private var selectionWindow: SelectionWindow?
+    private var editorWindow: EditorWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Request notification permission
@@ -54,6 +57,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         imageProcessor = ImageProcessor()
         outputManager = OutputManager(settings: settings)
         menuBarController = MenuBarController()
+        delayedScreenshotManager = DelayedScreenshotManager()
+
+        // Setup delayed screenshot callback
+        delayedScreenshotManager.onCountdownComplete = { [weak self] mode in
+            self?.executeDelayedScreenshot(mode: mode)
+        }
     }
 
     private func setupNotificationObservers() {
@@ -73,18 +82,51 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         NotificationCenter.default.addObserver(
             self,
+            selector: #selector(handleOpenHistory),
+            name: .openHistory,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
             selector: #selector(handleDidCompleteSelection(_:)),
             name: .didCompleteSelection,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleOpenEditor(_:)),
+            name: .openEditor,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleTriggerDelayedScreenshot(_:)),
+            name: .triggerDelayedScreenshot,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleCancelDelayedScreenshot),
+            name: .cancelDelayedScreenshot,
             object: nil
         )
     }
 
     private func setupGlobalHotKey() {
         hotKeyManager = HotKeyManager()
-        // Register Ctrl+Cmd+A (keyCode 0 = 'A', cmdKey + controlKey)
-        hotKeyManager.register(key: 0, modifiers: UInt32(cmdKey | controlKey))
-        hotKeyManager.onHotKeyPressed = { [weak self] in
+
+        // Register Ctrl+Cmd+A for screenshot (keyCode 0 = 'A')
+        hotKeyManager.register(key: 0, modifiers: UInt32(cmdKey | controlKey), id: 1) { [weak self] in
             self?.handleTriggerScreenshot()
+        }
+
+        // Register Cmd+H for history (keyCode 4 = 'H')
+        hotKeyManager.register(key: 4, modifiers: UInt32(cmdKey), id: 2) { [weak self] in
+            self?.handleOpenHistory()
         }
     }
 
@@ -101,12 +143,50 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindowController?.show()
     }
 
+    @objc private func handleOpenHistory() {
+        if historyWindow == nil {
+            historyWindow = HistoryWindow()
+        }
+        historyWindow?.show()
+    }
+
+    @objc private func handleOpenEditor(_ notification: Notification) {
+        guard let image = notification.object as? NSImage else { return }
+        openEditor(with: image)
+    }
+
     @objc private func handleDidCompleteSelection(_ notification: Notification) {
         guard let selectedRect = notification.object as? CGRect else { return }
 
         Task {
             await captureSelectedRegion(selectedRect)
         }
+    }
+
+    @objc private func handleTriggerDelayedScreenshot(_ notification: Notification) {
+        guard let info = notification.object as? [String: Any],
+              let delay = info["delay"] as? Int,
+              let modeString = info["mode"] as? String else {
+            return
+        }
+
+        let mode: ScreenshotMode
+        switch modeString {
+        case "fullScreen":
+            mode = .fullScreen
+        case "region":
+            mode = .region
+        case "window":
+            mode = .window
+        default:
+            mode = .region
+        }
+
+        delayedScreenshotManager.startDelayedScreenshot(delaySeconds: delay, mode: mode)
+    }
+
+    @objc private func handleCancelDelayedScreenshot() {
+        delayedScreenshotManager.cancelDelayedScreenshot()
     }
 
     private func startScreenshotProcess() async {
@@ -149,12 +229,66 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Capture the selected region
             let screenshot = try await screenshotEngine.captureRegion(rect: rect, display: display)
 
-            // Process output (clipboard + optional file save)
+            // Check if auto edit is enabled
             await MainActor.run {
-                outputManager.processScreenshot(screenshot)
+                if settings.autoEditAfterCapture {
+                    openEditor(with: screenshot)
+                } else {
+                    outputManager.processScreenshot(screenshot)
+                }
             }
         } catch {
             print("Failed to capture screenshot: \(error)")
+        }
+    }
+
+    private func executeDelayedScreenshot(mode: ScreenshotMode) {
+        Task {
+            switch mode {
+            case .fullScreen:
+                await captureFullScreen()
+            case .region:
+                await startScreenshotProcess()
+            case .window:
+                // Window capture not yet implemented, fallback to region
+                await startScreenshotProcess()
+            }
+        }
+    }
+
+    private func captureFullScreen() async {
+        do {
+            let screenshot = try await screenshotEngine.captureMainDisplay()
+
+            // Check if auto edit is enabled
+            await MainActor.run {
+                if settings.autoEditAfterCapture {
+                    openEditor(with: screenshot)
+                } else {
+                    outputManager.processScreenshot(screenshot)
+                }
+            }
+        } catch {
+            print("Failed to capture fullscreen: \(error)")
+            if !PermissionManager.checkScreenRecordingPermission() {
+                await MainActor.run {
+                    PermissionManager.showPermissionAlert()
+                }
+            }
+        }
+    }
+
+    private func openEditor(with image: NSImage) {
+        editorWindow = EditorWindow(image: image)
+
+        editorWindow?.onComplete = { [weak self] editedImage in
+            guard let self = self else { return }
+            self.outputManager.processScreenshot(editedImage)
+            self.editorWindow = nil
+        }
+
+        editorWindow?.onCancel = { [weak self] in
+            self?.editorWindow = nil
         }
     }
 

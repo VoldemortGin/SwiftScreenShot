@@ -2,7 +2,7 @@
 //  ScreenshotEngine.swift
 //  SwiftScreenShot
 //
-//  Screenshot engine using ScreenCaptureKit
+//  Screenshot engine using ScreenCaptureKit with error recovery
 //
 
 import ScreenCaptureKit
@@ -15,44 +15,77 @@ enum ScreenshotError: Error {
 }
 
 class ScreenshotEngine {
+    private let errorRecoveryManager = ErrorRecoveryManager.shared
+    private let errorLogger = ErrorLogger.shared
 
-    /// Capture a specific region of the display
+    /// Capture a specific region of the display with automatic retry
     func captureRegion(rect: CGRect, display: SCDisplay) async throws -> NSImage {
-        // Create screenshot configuration
-        let filter = SCContentFilter(display: display, excludingWindows: [])
-
-        let config = SCStreamConfiguration()
-        config.width = Int(rect.width * CGFloat(display.width) / CGFloat(display.width))
-        config.height = Int(rect.height * CGFloat(display.height) / CGFloat(display.height))
-        config.sourceRect = rect
-        config.scalesToFit = false
-        config.showsCursor = false
-
-        // Execute screenshot
-        let image = try await SCScreenshotManager.captureImage(
-            contentFilter: filter,
-            configuration: config
+        let result = await errorRecoveryManager.executeWithRetry(
+            operation: {
+                try await self.performCapture(rect: rect, display: display)
+            },
+            onError: { error in
+                self.errorLogger.logError(error, operationId: UUID().uuidString, attempt: 1)
+            }
         )
 
-        // Convert to NSImage
-        let nsImage = NSImage(cgImage: image, size: rect.size)
-        return nsImage
+        switch result {
+        case .recovered:
+            // Success - the operation already returned the image
+            // We need to capture again since executeWithRetry doesn't return the value
+            return try await performCapture(rect: rect, display: display)
+        case .failed(let error), .userActionRequired(let error), .maxRetriesExceeded(let error):
+            throw error
+        }
+    }
+
+    /// Perform actual capture operation
+    private func performCapture(rect: CGRect, display: SCDisplay) async throws -> NSImage {
+        do {
+            // Create screenshot configuration
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+
+            let config = SCStreamConfiguration()
+            config.width = Int(rect.width * CGFloat(display.width) / CGFloat(display.width))
+            config.height = Int(rect.height * CGFloat(display.height) / CGFloat(display.height))
+            config.sourceRect = rect
+            config.scalesToFit = false
+            config.showsCursor = false
+
+            // Execute screenshot
+            let image = try await SCScreenshotManager.captureImage(
+                contentFilter: filter,
+                configuration: config
+            )
+
+            // Convert to NSImage
+            let nsImage = NSImage(cgImage: image, size: rect.size)
+            return nsImage
+
+        } catch {
+            // Convert to RecoverableError
+            throw convertToRecoverableError(error)
+        }
     }
 
     /// Get all available displays
     func getDisplays() async throws -> [SCDisplay] {
-        let content = try await SCShareableContent.excludingDesktopWindows(
-            false,
-            onScreenWindowsOnly: true
-        )
-        return content.displays
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(
+                false,
+                onScreenWindowsOnly: true
+            )
+            return content.displays
+        } catch {
+            throw convertToRecoverableError(error)
+        }
     }
 
     /// Capture the main display fullscreen
     func captureMainDisplay() async throws -> NSImage {
         let displays = try await getDisplays()
         guard let mainDisplay = displays.first else {
-            throw ScreenshotError.noDisplay
+            throw ScreenshotRecoverableError.captureFailed(reason: "No display available")
         }
 
         let rect = CGRect(
@@ -67,27 +100,71 @@ class ScreenshotEngine {
 
     /// Capture current screen for background preview
     func captureCurrentScreen(for screen: NSScreen) async throws -> NSImage {
-        let displays = try await getDisplays()
+        do {
+            let displays = try await getDisplays()
 
-        // Find the matching display for the screen
-        guard let display = displays.first(where: { display in
-            display.width == Int(screen.frame.width * screen.backingScaleFactor)
-        }) else {
-            throw ScreenshotError.noDisplay
+            // Find the matching display for the screen
+            guard let display = displays.first(where: { display in
+                display.width == Int(screen.frame.width * screen.backingScaleFactor)
+            }) else {
+                throw ScreenshotRecoverableError.captureFailed(reason: "No matching display found")
+            }
+
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            let config = SCStreamConfiguration()
+            config.width = display.width
+            config.height = display.height
+            config.showsCursor = false
+
+            let image = try await SCScreenshotManager.captureImage(
+                contentFilter: filter,
+                configuration: config
+            )
+
+            let nsImage = NSImage(cgImage: image, size: screen.frame.size)
+            return nsImage
+
+        } catch {
+            throw convertToRecoverableError(error)
+        }
+    }
+
+    // MARK: - Error Conversion
+
+    private func convertToRecoverableError(_ error: Error) -> RecoverableError {
+        // Check if already a RecoverableError
+        if let recoverable = error as? RecoverableError {
+            return recoverable
         }
 
-        let filter = SCContentFilter(display: display, excludingWindows: [])
-        let config = SCStreamConfiguration()
-        config.width = display.width
-        config.height = display.height
-        config.showsCursor = false
+        // Check for ScreenshotError
+        if let screenshotError = error as? ScreenshotError {
+            switch screenshotError {
+            case .noDisplay:
+                return ScreenshotRecoverableError.captureFailed(reason: "No display available")
+            case .permissionDenied:
+                return ScreenshotRecoverableError.permissionDenied
+            case .captureFailed:
+                return ScreenshotRecoverableError.captureFailed(reason: "Capture failed")
+            }
+        }
 
-        let image = try await SCScreenshotManager.captureImage(
-            contentFilter: filter,
-            configuration: config
-        )
+        // Check NSError for specific codes
+        let nsError = error as NSError
 
-        let nsImage = NSImage(cgImage: image, size: screen.frame.size)
-        return nsImage
+        // Check for screen recording permission errors
+        if nsError.domain == "com.apple.screencapturekit" {
+            if nsError.code == -3801 { // Permission denied
+                return ScreenshotRecoverableError.permissionDenied
+            }
+        }
+
+        // System busy errors
+        if nsError.code == NSFileReadTooLargeError || nsError.code == NSFileReadUnknownError {
+            return ScreenshotRecoverableError.systemBusy(attempt: 1)
+        }
+
+        // Default to capture failed
+        return ScreenshotRecoverableError.captureFailed(reason: error.localizedDescription)
     }
 }

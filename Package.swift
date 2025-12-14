@@ -23,7 +23,16 @@ let package = Package(
             exclude: [
                 "SwiftScreenShot/Resources/Info.plist",
                 "SwiftScreenShot/Resources/SwiftScreenShot-Bridging-Header.h"
+            ],
+            resources: [
+                .process("SwiftScreenShot/Resources/Assets.xcassets"),
+                .process("SwiftScreenShot/Resources/Sounds")
             ]
+        ),
+        .testTarget(
+            name: "SwiftScreenShotTests",
+            dependencies: ["SwiftScreenShot"],
+            path: "Tests"
         )
     ]
 )

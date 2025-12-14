@@ -9,43 +9,69 @@ import Carbon
 import Cocoa
 
 class HotKeyManager {
-    private var hotKeyRef: EventHotKeyRef?
+    private var hotKeys: [(ref: EventHotKeyRef?, id: UInt32)] = []
     private var eventHandler: EventHandlerRef?
-    var onHotKeyPressed: (() -> Void)?
+    private var callbacks: [UInt32: () -> Void] = [:]
 
-    func register(key: UInt32, modifiers: UInt32) {
-        // Register hotkey: Ctrl+Cmd+A
-        var hotKeyID = EventHotKeyID(signature: 0x53535353, id: 1) // 'SSSS' for SwiftScreenShot
-        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
-                                       eventKind: UInt32(kEventHotKeyPressed))
+    func register(key: UInt32, modifiers: UInt32, id: UInt32 = 1, callback: @escaping () -> Void) {
+        // Store callback
+        callbacks[id] = callback
 
-        // Install event handler
-        InstallEventHandler(GetApplicationEventTarget(),
-                            { (nextHandler, theEvent, userData) -> OSStatus in
-            let manager = Unmanaged<HotKeyManager>
-                .fromOpaque(userData!)
-                .takeUnretainedValue()
-            manager.onHotKeyPressed?()
-            return noErr
-        }, 1, &eventType,
-        Unmanaged.passUnretained(self).toOpaque(),
-        &eventHandler)
+        // First time setup event handler
+        if eventHandler == nil {
+            var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                                           eventKind: UInt32(kEventHotKeyPressed))
 
-        // Register hotkey (keyCode for 'A' = 0)
+            InstallEventHandler(GetApplicationEventTarget(),
+                                { (nextHandler, theEvent, userData) -> OSStatus in
+                let manager = Unmanaged<HotKeyManager>
+                    .fromOpaque(userData!)
+                    .takeUnretainedValue()
+
+                // Get the hotkey ID from the event
+                var hotKeyID = EventHotKeyID()
+                GetEventParameter(theEvent,
+                                 UInt32(kEventParamDirectObject),
+                                 UInt32(typeEventHotKeyID),
+                                 nil,
+                                 MemoryLayout<EventHotKeyID>.size,
+                                 nil,
+                                 &hotKeyID)
+
+                // Call the corresponding callback
+                manager.callbacks[hotKeyID.id]?()
+                return noErr
+            }, 1, &eventType,
+            Unmanaged.passUnretained(self).toOpaque(),
+            &eventHandler)
+        }
+
+        // Register hotkey
+        var hotKeyID = EventHotKeyID(signature: 0x53535353, id: id)
+        var hotKeyRef: EventHotKeyRef?
+
         RegisterEventHotKey(key,
                            modifiers,
                            hotKeyID,
                            GetApplicationEventTarget(),
                            0,
                            &hotKeyRef)
+
+        hotKeys.append((ref: hotKeyRef, id: id))
     }
 
     func unregister() {
-        if let hotKeyRef = hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
+        for hotKey in hotKeys {
+            if let ref = hotKey.ref {
+                UnregisterEventHotKey(ref)
+            }
         }
+        hotKeys.removeAll()
+        callbacks.removeAll()
+
         if let eventHandler = eventHandler {
             RemoveEventHandler(eventHandler)
+            self.eventHandler = nil
         }
     }
 

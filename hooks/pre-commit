@@ -1,0 +1,107 @@
+#!/bin/bash
+
+# Git pre-commit hook
+# 确保在提交前图标资源已生成
+
+set -e
+
+# 获取项目根目录
+PROJECT_ROOT=$(git rev-parse --show-toplevel)
+ICON_DIR="$PROJECT_ROOT/Sources/SwiftScreenShot/Resources/Assets.xcassets/AppIcon.appiconset"
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+echo "======================================"
+echo "Git Pre-Commit Hook: SwiftScreenShot"
+echo "======================================"
+echo ""
+
+# 检查是否修改了图标生成脚本
+if git diff --cached --name-only | grep -q "scripts/generate_icons.swift"; then
+    echo -e "${YELLOW}检测到图标生成脚本已修改${NC}"
+    echo ""
+
+    # 询问是否重新生成图标
+    read -p "是否重新生成图标? (y/N): " -n 1 -r
+    echo ""
+
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo -e "${GREEN}正在重新生成图标...${NC}"
+        "$PROJECT_ROOT/scripts/generate_icons.swift"
+
+        # 将新生成的图标添加到暂存区
+        git add "$ICON_DIR"/*.png
+        echo -e "${GREEN}✓ 图标已重新生成并添加到暂存区${NC}"
+    fi
+    echo ""
+fi
+
+# 检查图标是否存在
+if [ ! -f "$ICON_DIR/icon_512x512@2x.png" ]; then
+    echo -e "${RED}错误: 应用图标未找到!${NC}"
+    echo ""
+    echo "图标目录: $ICON_DIR"
+    echo ""
+    echo "请运行以下命令生成图标:"
+    echo "  ./scripts/generate_icons.swift"
+    echo ""
+    echo "然后将图标添加到提交:"
+    echo "  git add Sources/SwiftScreenShot/Resources/Assets.xcassets/"
+    echo ""
+    exit 1
+fi
+
+# 检查 Info.plist 是否配置了图标
+INFO_PLIST="$PROJECT_ROOT/Sources/SwiftScreenShot/Resources/Info.plist"
+if [ -f "$INFO_PLIST" ]; then
+    if ! grep -q "CFBundleIconFile" "$INFO_PLIST" || ! grep -q "AppIcon" "$INFO_PLIST"; then
+        echo -e "${YELLOW}警告: Info.plist 中未正确配置图标${NC}"
+        echo ""
+        echo "请确保 Info.plist 包含:"
+        echo "  <key>CFBundleIconFile</key>"
+        echo "  <string>AppIcon</string>"
+        echo ""
+    fi
+fi
+
+# 检查 Package.swift 是否包含资源配置
+PACKAGE_SWIFT="$PROJECT_ROOT/Package.swift"
+if [ -f "$PACKAGE_SWIFT" ]; then
+    if ! grep -q "Assets.xcassets" "$PACKAGE_SWIFT"; then
+        echo -e "${YELLOW}警告: Package.swift 中未配置 Assets 资源${NC}"
+        echo ""
+        echo "请确保 Package.swift 的 target 包含:"
+        echo "  resources: ["
+        echo "      .process(\"SwiftScreenShot/Resources/Assets.xcassets\")"
+        echo "  ]"
+        echo ""
+    fi
+fi
+
+echo -e "${GREEN}✓ 图标资源检查通过${NC}"
+echo ""
+
+# 运行快速构建测试（可选）
+if [ -n "$SWIFT_SCREENSHOT_HOOK_BUILD" ]; then
+    echo "运行构建测试..."
+    if swift build > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ 构建测试通过${NC}"
+    else
+        echo -e "${RED}✗ 构建测试失败${NC}"
+        echo ""
+        echo "请修复构建错误后再提交"
+        exit 1
+    fi
+    echo ""
+fi
+
+echo "======================================"
+echo -e "${GREEN}Pre-commit 检查完成${NC}"
+echo "======================================"
+echo ""
+
+exit 0

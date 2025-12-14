@@ -11,10 +11,12 @@ class SelectionWindow: NSWindow {
     private var selectionView: SelectionView!
     private let screenFrame: CGRect
     private var backgroundImage: NSImage?
+    private let mode: ScreenshotMode
 
-    init(screen: NSScreen, backgroundImage: NSImage?) {
+    init(screen: NSScreen, backgroundImage: NSImage?, mode: ScreenshotMode = .region) {
         self.screenFrame = screen.frame
         self.backgroundImage = backgroundImage
+        self.mode = mode
 
         super.init(
             contentRect: screenFrame,
@@ -51,13 +53,17 @@ class SelectionWindow: NSWindow {
     private func setupSelectionView() {
         selectionView = SelectionView(
             frame: self.contentView!.bounds,
-            backgroundImage: backgroundImage
+            backgroundImage: backgroundImage,
+            mode: mode
         )
         selectionView.onComplete = { [weak self] rect in
             self?.handleSelection(rect: rect)
         }
         selectionView.onCancel = { [weak self] in
             self?.close()
+        }
+        selectionView.onWindowSelected = { [weak self] window in
+            self?.handleWindowSelection(window: window)
         }
 
         self.contentView = selectionView
@@ -71,6 +77,16 @@ class SelectionWindow: NSWindow {
         NotificationCenter.default.post(
             name: .didCompleteSelection,
             object: screenRect
+        )
+
+        self.close()
+    }
+
+    private func handleWindowSelection(window: WindowInfo) {
+        // Notify via notification center
+        NotificationCenter.default.post(
+            name: .didCompleteWindowSelection,
+            object: window
         )
 
         self.close()
