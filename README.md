@@ -204,3 +204,4 @@ MIT License
 ## 致谢
 
 本项目参考了微信 macOS 版截图工具的交互设计。
+# SwiftScreenShot
