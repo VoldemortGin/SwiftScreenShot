@@ -316,7 +316,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     AppLogger.shared.debug("Opening editor for region screenshot", category: .editor)
                     openEditor(with: screenshot)
                 } else {
-                    outputManager.processScreenshot(screenshot)
+                    Task {
+                        await outputManager.processScreenshot(screenshot)
+                    }
                 }
             }
         } catch {
@@ -346,7 +348,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     AppLogger.shared.debug("Opening editor for fullscreen screenshot", category: .editor)
                     openEditor(with: screenshot)
                 } else {
-                    outputManager.processScreenshot(screenshot)
+                    Task {
+                        await outputManager.processScreenshot(screenshot)
+                    }
                 }
             }
         } catch {
@@ -376,7 +380,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     AppLogger.shared.debug("Opening editor for window screenshot", category: .editor)
                     openEditor(with: screenshot)
                 } else {
-                    outputManager.processScreenshot(screenshot)
+                    Task {
+                        await outputManager.processScreenshot(screenshot)
+                    }
                 }
             }
         } catch {
@@ -394,8 +400,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         editorWindow?.onComplete = { [weak self] editedImage in
             guard let self = self else { return }
-            self.outputManager.processScreenshot(editedImage)
-            self.editorWindow = nil
+            Task {
+                await self.outputManager.processScreenshot(editedImage)
+                await MainActor.run {
+                    self.editorWindow = nil
+                }
+            }
         }
 
         editorWindow?.onCancel = { [weak self] in

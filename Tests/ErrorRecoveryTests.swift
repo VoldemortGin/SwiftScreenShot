@@ -355,7 +355,7 @@ class MockErrorRecoveryDelegate {
     var successCount = 0
     var retryCount = 0
 
-    func onError(_ error: RecoverableError) {
+    func onError(_ error: SwiftScreenShot.RecoverableError) {
         errorCount += 1
     }
 

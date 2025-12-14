@@ -76,6 +76,49 @@ class ScreenshotSettings: ObservableObject {
         }
     }
 
+    // Hotkey configurations
+    @Published var regionScreenshotHotKey: HotKeyConfig {
+        didSet {
+            // Save to UserDefaults
+            if let encoded = try? JSONEncoder().encode(regionScreenshotHotKey) {
+                UserDefaults.standard.set(encoded, forKey: "regionScreenshotHotKey")
+            }
+            // Post notification for hotkey changes
+            NotificationCenter.default.post(name: .hotKeysDidChange, object: nil)
+        }
+    }
+
+    @Published var fullScreenshotHotKey: HotKeyConfig {
+        didSet {
+            if let encoded = try? JSONEncoder().encode(fullScreenshotHotKey) {
+                UserDefaults.standard.set(encoded, forKey: "fullScreenshotHotKey")
+            }
+            NotificationCenter.default.post(name: .hotKeysDidChange, object: nil)
+        }
+    }
+
+    @Published var windowScreenshotHotKey: HotKeyConfig {
+        didSet {
+            if let encoded = try? JSONEncoder().encode(windowScreenshotHotKey) {
+                UserDefaults.standard.set(encoded, forKey: "windowScreenshotHotKey")
+            }
+            NotificationCenter.default.post(name: .hotKeysDidChange, object: nil)
+        }
+    }
+
+    // Screenshot mode settings
+    @Published var fullScreenCaptureMode: FullScreenCaptureMode {
+        didSet {
+            UserDefaults.standard.set(fullScreenCaptureMode.rawValue, forKey: "fullScreenCaptureMode")
+        }
+    }
+
+    @Published var includeWindowShadow: Bool {
+        didSet {
+            UserDefaults.standard.set(includeWindowShadow, forKey: "includeWindowShadow")
+        }
+    }
+
     init() {
         self.shouldSaveToFile = UserDefaults.standard.bool(forKey: "shouldSaveToFile")
 
@@ -162,6 +205,40 @@ class ScreenshotSettings: ObservableObject {
         } else {
             self.retryIntervalMultiplier = UserDefaults.standard.double(forKey: "retryIntervalMultiplier")
         }
+
+        // Initialize hotkey configurations from UserDefaults or defaults
+        if let data = UserDefaults.standard.data(forKey: "regionScreenshotHotKey"),
+           let decoded = try? JSONDecoder().decode(HotKeyConfig.self, from: data) {
+            self.regionScreenshotHotKey = decoded
+        } else {
+            self.regionScreenshotHotKey = .defaultRegionScreenshot
+        }
+
+        if let data = UserDefaults.standard.data(forKey: "fullScreenshotHotKey"),
+           let decoded = try? JSONDecoder().decode(HotKeyConfig.self, from: data) {
+            self.fullScreenshotHotKey = decoded
+        } else {
+            self.fullScreenshotHotKey = .defaultFullScreenshot
+        }
+
+        if let data = UserDefaults.standard.data(forKey: "windowScreenshotHotKey"),
+           let decoded = try? JSONDecoder().decode(HotKeyConfig.self, from: data) {
+            self.windowScreenshotHotKey = decoded
+        } else {
+            self.windowScreenshotHotKey = .defaultWindowScreenshot
+        }
+
+        // Initialize screenshot mode settings
+        let captureModeRaw = UserDefaults.standard.string(forKey: "fullScreenCaptureMode") ?? "current"
+        self.fullScreenCaptureMode = FullScreenCaptureMode(rawValue: captureModeRaw) ?? .currentScreen
+
+        // Default to true for including window shadow
+        if UserDefaults.standard.object(forKey: "includeWindowShadow") == nil {
+            self.includeWindowShadow = true
+            UserDefaults.standard.set(true, forKey: "includeWindowShadow")
+        } else {
+            self.includeWindowShadow = UserDefaults.standard.bool(forKey: "includeWindowShadow")
+        }
     }
 
     private func updateRetryConfiguration() {
@@ -194,5 +271,26 @@ class ScreenshotSettings: ObservableObject {
                 print("Failed to configure launch at login: \(error)")
             }
         }
+    }
+
+    // MARK: - Hotkey Management
+
+    /// Reset a specific hotkey to its default value
+    func resetHotKey(for type: HotKeyType) {
+        switch type {
+        case .regionScreenshot:
+            self.regionScreenshotHotKey = .defaultRegionScreenshot
+        case .fullScreenshot:
+            self.fullScreenshotHotKey = .defaultFullScreenshot
+        case .windowScreenshot:
+            self.windowScreenshotHotKey = .defaultWindowScreenshot
+        }
+    }
+
+    /// Reset all hotkeys to their default values
+    func resetAllHotKeys() {
+        self.regionScreenshotHotKey = .defaultRegionScreenshot
+        self.fullScreenshotHotKey = .defaultFullScreenshot
+        self.windowScreenshotHotKey = .defaultWindowScreenshot
     }
 }
